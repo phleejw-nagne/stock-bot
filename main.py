@@ -19,10 +19,21 @@ if 'trade_history' not in st.session_state: st.session_state['trade_history'] = 
 
 # --- API 연결 ---
 api = KisApi()
-if 'token_ok' not in st.session_state:
-    if api.get_access_token(): st.session_state['token_ok'] = True
-    else: st.error("API 접속 실패"); st.stop()
-else: api.get_access_token() 
+# 1. 세션에 저장된 토큰이 있는지 확인
+if 'kis_token' in st.session_state and st.session_state['kis_token'] is not None:
+    # 이미 발급받은 토큰이 있으면? -> 그냥 그거 씀 (API 요청 안 함!)
+    api.token = st.session_state['kis_token']
+    # print("기존 토큰을 사용합니다.") 
+
+else:
+    # 토큰이 없으면? -> 새로 발급받고 저장함
+    if api.get_access_token():
+        st.session_state['kis_token'] = api.token # 토큰값 자체를 저장
+        st.session_state['token_ok'] = True
+        # 여기에 카톡 알림이 있다면, 최초 1회만 발송됨
+    else:
+        st.error("API 토큰 발급 실패! 키 값을 확인하세요.")
+        st.stop()
 
 def get_stock_name(code):
     if code in st.session_state['stock_names']: return st.session_state['stock_names'][code]
