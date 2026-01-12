@@ -1,11 +1,12 @@
-# kakao_msg.py
 import requests
 import json
 import streamlit as st
+# import config  <-- 여기도 지웁니다!
 
 def send_message(text):
     url = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
     
+    # 토큰 가져오기 (서버 -> 로컬 순서)
     try:
         token = st.secrets["KAKAO_TOKEN"]
     except:
