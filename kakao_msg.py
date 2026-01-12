@@ -1,7 +1,6 @@
 import requests
 import json
 import streamlit as st
-# import config  <-- 여기도 지웁니다!
 
 def send_message(text):
     url = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
