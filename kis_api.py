@@ -2,16 +2,16 @@ import requests
 import json
 import pandas as pd
 import streamlit as st
-import datetime
+import datetime # 날짜 계산을 위해 필수
 import os
 
 class KisApi:
     def __init__(self):
         self.base_url = "https://openapivts.koreainvestment.com:29443"
         self.token = None
-        self.token_file = "token_cache.json" # 토큰을 저장할 파일 이름
+        self.token_file = "token_cache.json" # 토큰 저장 파일명
         
-        # 1. 시크릿/Config 로딩 (기존과 동일)
+        # 1. 시크릿/Config 로딩
         try:
             self.app_key = st.secrets["APP_KEY"]
             self.app_secret = st.secrets["APP_SECRET"]
@@ -23,7 +23,7 @@ class KisApi:
             self.base_url = config.URL_BASE
 
     # -----------------------------------------------------------
-    # [핵심 수정] 토큰을 파일에 저장하고 불러오는 로직 추가
+    # [토큰 관리] 파일 저장/로드 (카톡 알림 방지)
     # -----------------------------------------------------------
     def save_token_to_file(self, token):
         data = {
@@ -35,35 +35,34 @@ class KisApi:
 
     def load_token_from_file(self):
         if not os.path.exists(self.token_file):
-            return None # 파일이 없으면 실패
+            return None 
         
         try:
             with open(self.token_file, "r") as f:
                 data = json.load(f)
             
-            # 토큰 유효시간 체크 (안전을 위해 6시간이 지났으면 폐기)
+            # 6시간(21600초) 유효성 체크
             saved_time = datetime.datetime.strptime(data['timestamp'], "%Y-%m-%d %H:%M:%S")
             time_diff = datetime.datetime.now() - saved_time
             
-            if time_diff.total_seconds() > 21600: # 6시간(21600초) 지남?
-                return None # 너무 오래됨 -> 새로 발급 받아야 함
+            if time_diff.total_seconds() > 21600: 
+                return None # 만료됨
             
-            return data['token'] # 유효한 토큰 반환
+            return data['token']
         except:
             return None
 
     # -----------------------------------------------------------
-    # [수정된 토큰 발급 함수]
+    # [토큰 발급] 캐시 확인 후 없을 때만 요청
     # -----------------------------------------------------------
     def get_access_token(self):
-        # 1. 먼저 파일에 저장된 유효한 토큰이 있는지 확인
+        # 1. 저장된 토큰 확인
         saved_token = self.load_token_from_file()
         if saved_token:
             self.token = saved_token
-            # st.success("기존 토큰을 재사용합니다. (알림 안 옴)")
             return True
 
-        # 2. 저장된 게 없거나 만료됐으면 -> 한국투자증권에 새로 요청 (이때만 알림 옴)
+        # 2. 없으면 새로 요청 (이때만 알림 발생)
         path = "oauth2/tokenP"
         url = f"{self.base_url}/{path}"
         headers = {"content-type": "application/json"}
@@ -78,12 +77,14 @@ class KisApi:
         if res.status_code == 200:
             new_token = res.json()['access_token']
             self.token = new_token
-            self.save_token_to_file(new_token) # [중요] 파일에 저장해두기!
+            self.save_token_to_file(new_token) # 파일에 저장
             return True
         else:
             return False
 
-    # (나머지 조회 함수들은 그대로 유지)
+    # -----------------------------------------------------------
+    # [현재가 조회]
+    # -----------------------------------------------------------
     def get_current_price(self, stock_code):
         path = "uapi/domestic-stock/v1/quotations/inquire-price"
         url = f"{self.base_url}/{path}"
@@ -98,36 +99,66 @@ class KisApi:
         res = requests.get(url, headers=headers, params=params)
         return res.json()['output']
 
-    def get_daily_price(self, stock_code, period="D"):
-        path = "uapi/domestic-stock/v1/quotations/inquire-daily-price"
+    # -----------------------------------------------------------
+    # [차트 데이터 조회] 기간별 시세 (150일 문제 해결 버전)
+    # -----------------------------------------------------------
+    def get_daily_price(self, stock_code, n_days=100):
+        # 1. 날짜 계산 (오늘 ~ n일 전)
+        end_dt = datetime.datetime.now()
+        start_dt = end_dt - datetime.timedelta(days=n_days)
+        
+        str_start = start_dt.strftime("%Y%m%d")
+        str_end = end_dt.strftime("%Y%m%d")
+
+        # 2. 기간별 시세 API 호출 (TR_ID 변경됨: FHKST03010100)
+        path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
         url = f"{self.base_url}/{path}"
+        
         headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {self.token}",
             "appkey": self.app_key,
             "appsecret": self.app_secret,
-            "tr_id": "FHKST01010400"
+            "tr_id": "FHKST03010100"
         }
+        
         params = {
             "fid_cond_mrkt_div_code": "J",
             "fid_input_iscd": stock_code,
-            "fid_period_div_code": period,
+            "fid_input_date_1": str_start,
+            "fid_input_date_2": str_end,
+            "fid_period_div_code": "D",
             "fid_org_adj_prc": "1"
         }
+        
         res = requests.get(url, headers=headers, params=params)
-        data = res.json()['output']
-        df = pd.DataFrame(data)
-        df = df[['stck_bsop_date', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'stck_clpr', 'acml_vol']]
-        df.columns = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
-        df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            df[col] = pd.to_numeric(df[col])
-        return df.sort_values('Date')
+        
+        # 3. 데이터 파싱 (output2 사용)
+        if res.status_code == 200 and 'output2' in res.json():
+            data = res.json()['output2']
+            df = pd.DataFrame(data)
+            
+            if df.empty: return pd.DataFrame()
 
+            df = df[['stck_bsop_date', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'stck_clpr', 'acml_vol']]
+            df.columns = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+            
+            df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                df[col] = pd.to_numeric(df[col])
+            
+            return df.sort_values('Date')
+        else:
+            return pd.DataFrame()
+
+    # -----------------------------------------------------------
+    # [주문 전송]
+    # -----------------------------------------------------------
     def send_order(self, stock_code, qty, buy_sell_type):
         path = "uapi/domestic-stock/v1/trading/order-cash"
         url = f"{self.base_url}/{path}"
         tr_id = "VTTC0802U" if buy_sell_type == 'buy' else "VTTC0801U"
+        
         headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {self.token}",
@@ -135,6 +166,7 @@ class KisApi:
             "appsecret": self.app_secret,
             "tr_id": tr_id
         }
+        
         try:
             cano = st.secrets["CANO"]
             acnt_prdt_cd = st.secrets["ACNT_PRDT_CD"]
