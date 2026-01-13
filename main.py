@@ -15,6 +15,18 @@ import pandas as pd
 # --- 페이지 설정 ---
 st.set_page_config(layout="wide", page_title="스마트 주식 봇 Ver 6.2")
 
+# --- 스타일 설정 (사이드바 버튼 간격 좁히기) ---
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] .stButton button {
+        padding: 0px 5px;
+        font-size: 14px;
+        height: 38px;
+        width: 100%;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ==========================================
 # [데이터 저장/로드 기능] 
 # ==========================================
@@ -64,6 +76,17 @@ def get_stock_name(code):
         save_data() 
         return name
     except: return code
+
+# [NEW] 순서 변경 함수 (위/아래 이동 및 저장)
+def move_stock(index, direction):
+    watchlist = st.session_state['watchlist']
+    if direction == 'up' and index > 0:
+        watchlist[index], watchlist[index-1] = watchlist[index-1], watchlist[index]
+    elif direction == 'down' and index < len(watchlist) - 1:
+        watchlist[index], watchlist[index+1] = watchlist[index+1], watchlist[index]
+    
+    save_data() # 순서 변경 후 즉시 파일 저장
+    st.rerun()  # 화면 새로고침
 
 # ==========================================
 # [분석 로직] 기술적 분석 및 신호 생성
@@ -119,7 +142,7 @@ def analyze_market_signal(df, current_price):
     return signal, color, rsi, vol_ratio
 
 # ==========================================
-# [사이드바] 종목 관리
+# [사이드바] 종목 관리 (순서 변경 기능 적용)
 # ==========================================
 st.sidebar.header("📋 종목 리스트")
 new_code = st.sidebar.text_input("종목 추가", placeholder="예: 005930")
@@ -133,20 +156,41 @@ if st.sidebar.button("➕ 추가"):
         st.rerun()
 
 st.sidebar.markdown("---")
-for code in st.session_state['watchlist'][:]:
+
+# 리스트 출력 (index 활용)
+for idx, code in enumerate(st.session_state['watchlist']):
     if code not in st.session_state['trade_history']:
         st.session_state['trade_history'][code] = {'buy_ordered': False, 'sell_ordered': False}
     
     name = get_stock_name(code)
-    col_list, col_del = st.sidebar.columns([0.8, 0.2])
-    with col_list:
-        if st.button(f"{name} ({code})", key=f"sel_{code}"):
+    
+    # [레이아웃] 이름(3) | 위(1) | 아래(1) | 삭제(1) 비율로 나눔
+    c_name, c_up, c_down, c_del = st.sidebar.columns([3, 1, 1, 1])
+    
+    with c_name:
+        # 종목 선택 버튼
+        if st.button(f"{name}", key=f"sel_{code}"):
             st.session_state['current_stock'] = code
             st.rerun()
-    with col_del:
+            
+    with c_up:
+        # 위로 이동 (첫 번째 항목은 버튼 표시 안 함)
+        if idx > 0:
+            if st.button("⬆️", key=f"up_{code}"):
+                move_stock(idx, 'up')
+                
+    with c_down:
+        # 아래로 이동 (마지막 항목은 버튼 표시 안 함)
+        if idx < len(st.session_state['watchlist']) - 1:
+            if st.button("⬇️", key=f"down_{code}"):
+                move_stock(idx, 'down')
+                
+    with c_del:
+        # 삭제 버튼
         if st.button("❌", key=f"del_{code}"):
             st.session_state['watchlist'].remove(code)
             if st.session_state['current_stock'] == code:
+                # 삭제된 종목이 현재 보고 있는 종목이면 첫 번째로 변경
                 st.session_state['current_stock'] = st.session_state['watchlist'][0] if st.session_state['watchlist'] else "005930"
             save_data()
             st.rerun()
@@ -168,10 +212,6 @@ try:
     yesterday_price = int(curr_data['stck_sdpr']) 
     change_rate = float(curr_data['prdy_ctrt']) 
     
-    # -------------------------------------------------------
-    # [수정됨] 차트 데이터 150일로 증가 (약 7개월치 확보)
-    # 5개월 이상의 데이터를 확실하게 보여주기 위함
-    # -------------------------------------------------------
     chart_dict = api.get_daily_price(target_code, 150)
     
     df = pd.DataFrame(chart_dict) 
